@@ -5,7 +5,7 @@ import uuid
 import textwrap
 import subprocess
 import requests
-from flask import Flask, request, send_file, jsonify
+from flask import Flask, request, send_file, jsonify, after_this_request
 
 app = Flask(__name__)
 
@@ -70,6 +70,16 @@ def render_video():
     txt_path = f"/tmp/{job_id}.txt"
     out_path = f"/tmp/{job_id}.mp4"
 
+    # Make.com को MP4 भेजने के तुरंत बाद आउटपुट वीडियो को /tmp से ऑटो-डिलीट करने के लिए
+    @after_this_request
+    def cleanup_output(response):
+        try:
+            if os.path.exists(out_path):
+                os.remove(out_path)
+        except Exception as cleanup_err:
+            app.logger.error(f"Cleanup error for {out_path}: {cleanup_err}")
+        return response
+
     try:
         # 1. Download background image
         download_gdrive_file(image_url, img_path)
@@ -116,6 +126,7 @@ def render_video():
         return jsonify({"error": str(e)}), 500
 
     finally:
+        # इनपुट टेम्परेरी फाइलों (image, mp3, txt) को तुरंत साफ़ करें
         for p in [img_path, aud_path, txt_path]:
             if os.path.exists(p):
                 os.remove(p)
