@@ -12,12 +12,9 @@ app = Flask(__name__)
 def download_gdrive_file(url, dest_path):
     session = requests.Session()
     response = session.get(url, stream=True, timeout=30)
-    
-    # Handle Google Drive large-file virus scan confirmation page if returned
+
     content_type = response.headers.get("Content-Type", "")
     if "text/html" in content_type and "drive.google.com" in url:
-        html_text = response.text
-        match = re.search(r'id="download-form" action="([^"]+)"', html_text)
         file_id_match = re.search(r'[?&]id=([^&]+)', url)
         if file_id_match:
             file_id = file_id_match.group(1)
@@ -29,20 +26,17 @@ def download_gdrive_file(url, dest_path):
             if chunk:
                 f.write(chunk)
 
-    # Verify downloaded file is not an HTML error page
     with open(dest_path, "rb") as f:
         header = f.read(200)
     if b"<!DOCTYPE html" in header or b"<html" in header:
         raise ValueError(f"Google Drive returned an HTML page instead of media for URL: {url}. Check file permissions ('Anyone with the link').")
 
 def get_devanagari_font():
-    # Search system fonts for NotoSansDevanagari
     matches = glob.glob("/usr/share/fonts/**/NotoSansDevanagari*Bold*.ttf", recursive=True)
     if not matches:
         matches = glob.glob("/usr/share/fonts/**/NotoSansDevanagari*.ttf", recursive=True)
     if matches:
         return matches[0]
-    # Fallback to any available TrueType font
     fallback = glob.glob("/usr/share/fonts/**/*.ttf", recursive=True)
     if fallback:
         return fallback[0]
@@ -54,13 +48,21 @@ def health():
 
 @app.route("/render", methods=["POST"])
 def render_video():
-    data = request.get_json(force=True)
-    image_url = data.get("image_url")
-    audio_url = data.get("audio_url")
-    topic = data.get("topic", "").strip()
+    # Support both Multipart/form-data (direct binary upload) and JSON payloads
+    if request.content_type and "multipart/form-data" in request.content_type:
+        image_url = request.form.get("image_url", "").strip()
+        audio_url = request.form.get("audio_url", "").strip()
+        topic = request.form.get("topic", "").strip()
+        uploaded_audio = request.files.get("audio_file")
+    else:
+        data = request.get_json(force=True, silent=True) or {}
+        image_url = data.get("image_url", "").strip()
+        audio_url = data.get("audio_url", "").strip()
+        topic = data.get("topic", "").strip()
+        uploaded_audio = None
 
-    if not image_url or not audio_url:
-        return jsonify({"error": "image_url and audio_url are required"}), 400
+    if not image_url or (not uploaded_audio and not audio_url):
+        return jsonify({"error": "image_url and either audio_file or audio_url are required"}), 400
 
     job_id = str(uuid.uuid4())
     img_path = f"/tmp/{job_id}.png"
@@ -69,16 +71,21 @@ def render_video():
     out_path = f"/tmp/{job_id}.mp4"
 
     try:
-        # 1. Download background image and MP3 audio safely
+        # 1. Download background image
         download_gdrive_file(image_url, img_path)
-        download_gdrive_file(audio_url, aud_path)
 
-        # 2. Wrap Hindi topic text neatly into 2 lines
+        # 2. Save uploaded MP3 directly (or fallback to downloading audio_url)
+        if uploaded_audio:
+            uploaded_audio.save(aud_path)
+        else:
+            download_gdrive_file(audio_url, aud_path)
+
+        # 3. Wrap Hindi topic text neatly into 2 lines
         wrapped_topic = "\n".join(textwrap.wrap(topic, width=22))
         with open(txt_path, "w", encoding="utf-8") as f:
             f.write(wrapped_topic)
 
-        # 3. Locate font and run FFmpeg
+        # 4. Locate font and run FFmpeg
         font_file = get_devanagari_font()
         vf_filter = (
             f"scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,"
