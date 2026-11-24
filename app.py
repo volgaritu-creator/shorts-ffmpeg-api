@@ -31,15 +31,39 @@ def download_gdrive_file(url, dest_path):
     if b"<!DOCTYPE html" in header or b"<html" in header:
         raise ValueError(f"Google Drive returned an HTML page instead of media for URL: {url}. Check file permissions ('Anyone with the link').")
 
-def get_devanagari_font():
-    matches = glob.glob("/usr/share/fonts/**/NotoSansDevanagari*Bold*.ttf", recursive=True)
-    if not matches:
-        matches = glob.glob("/usr/share/fonts/**/NotoSansDevanagari*.ttf", recursive=True)
-    if matches:
-        return matches[0]
-    fallback = glob.glob("/usr/share/fonts/**/*.ttf", recursive=True)
-    if fallback:
-        return fallback[0]
+def get_font_for_text(text):
+    # चेक करें कि टाइटल में देवनागरी (हिंदी) अक्षर हैं या यह इंग्लिश है
+    has_devanagari = bool(re.search(r'[\u0900-\u097F]', text or ""))
+
+    if has_devanagari:
+        patterns = [
+            "/usr/share/fonts/**/NotoSansDevanagari*Bold*.ttf",
+            "/usr/share/fonts/**/NotoSansDevanagari*.ttf",
+        ]
+    else:
+        # इंग्लिश टाइटल के लिए स्पष्ट Bold Latin फ़ॉन्ट चुनें (ताकि □□ बॉक्स न बनें)
+        patterns = [
+            "/usr/share/fonts/**/DejaVuSans-Bold.ttf",
+            "/usr/share/fonts/**/NotoSans-Bold.ttf",
+            "/usr/share/fonts/**/LiberationSans-Bold.ttf",
+            "/usr/share/fonts/**/FreeSansBold.ttf",
+            "/usr/share/fonts/**/DejaVuSans.ttf",
+            "/usr/share/fonts/**/NotoSans-Regular.ttf",
+        ]
+
+    for pattern in patterns:
+        matches = glob.glob(pattern, recursive=True)
+        if matches:
+            return matches[0]
+
+    # अंतिम फ़ॉलबैक: किसी भी नॉन-देवनागरी TTF फ़ॉन्ट को प्राथमिकता दें
+    all_ttf = glob.glob("/usr/share/fonts/**/*.ttf", recursive=True)
+    non_devanagari = [f for f in all_ttf if "Devanagari" not in f]
+    if non_devanagari:
+        return non_devanagari[0]
+    if all_ttf:
+        return all_ttf[0]
+
     raise FileNotFoundError("No TrueType (.ttf) fonts found in /usr/share/fonts")
 
 @app.route("/", methods=["GET"])
@@ -90,13 +114,13 @@ def render_video():
         else:
             download_gdrive_file(audio_url, aud_path)
 
-        # 3. Wrap Hindi topic text neatly into 2 lines
+        # 3. Wrap topic text neatly into 2 lines
         wrapped_topic = "\n".join(textwrap.wrap(topic, width=22))
         with open(txt_path, "w", encoding="utf-8") as f:
             f.write(wrapped_topic)
 
-        # 4. Locate font and run FFmpeg
-        font_file = get_devanagari_font()
+        # 4. Locate appropriate font (English vs Hindi) and run FFmpeg
+        font_file = get_font_for_text(topic)
         vf_filter = (
             f"scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,"
             f"drawtext=fontfile={font_file}:textfile={txt_path}:"
